@@ -17,6 +17,8 @@ function run(args: string[] = [], cwd: string = process.cwd()): string {
 }
 
 describe("CLI", () => {
+  const tmp = useTmpDir();
+
   it("shows help with --help", () => {
     const output = run(["--help"]);
     ok(output.includes("autoskills"));
@@ -32,7 +34,6 @@ describe("CLI", () => {
   });
 
   it("clears the autoskills cache with --clear-cache", () => {
-    const tmp = useTmpDir();
     const cacheDir = join(tmp.path, "cache");
     const prevCacheDir = process.env.AUTOSKILLS_CACHE_DIR;
 
