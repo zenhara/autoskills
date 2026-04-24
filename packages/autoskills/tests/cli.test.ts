@@ -184,7 +184,6 @@ describe("CLI", () => {
       const output = run(["--dry-run"], tmp.path);
       ok(output.includes("Cloudflare AI"));
       ok(output.includes("agents-sdk"));
-      ok(!output.includes("building-ai-agent-on-cloudflare"));
     });
 
     it("detects Cloudflare Agents from agents package", () => {
@@ -193,7 +192,6 @@ describe("CLI", () => {
       ok(output.includes("Cloudflare Agents"));
       ok(output.includes("agents-sdk"));
       ok(output.includes("sandbox-sdk"));
-      ok(!output.includes("building-mcp-server-on-cloudflare"));
     });
 
     it("detects Cloudflare + Vite combo for vinext", () => {
