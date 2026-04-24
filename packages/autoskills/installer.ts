@@ -172,12 +172,20 @@ function githubDownloadHeaders(url: string): HeadersInit {
   return headers;
 }
 
+function isDisallowedSkillFile(rel: string): boolean {
+  return rel.split("/").pop() === "Archive.zip";
+}
+
 async function downloadRegistryFile(
   skillName: string,
   entry: RegistryEntry,
   rel: string,
   opts: InstallOptions,
 ): Promise<Buffer> {
+  if (isDisallowedSkillFile(rel)) {
+    throw new Error(`refusing to download disallowed skill archive: ${rel}`);
+  }
+
   const expected = entry.sha256[rel];
   if (!expected) {
     throw new Error(`no recorded hash for ${rel}`);
