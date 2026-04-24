@@ -31,6 +31,8 @@ import {
 import { parseSkillPath } from "../lib.ts";
 import { bold, cyan, dim, green, log, red, yellow } from "../colors.ts";
 
+process.loadEnvFile()
+
 // ── Config ───────────────────────────────────────────────────
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -105,28 +107,57 @@ async function ghFetch(url) {
   const headers = {
     "User-Agent": "autoskills-sync",
     Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
   };
   if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
   const res = await fetch(url, { headers });
   if (!res.ok) {
+    const resetAt = Number(res.headers.get("x-ratelimit-reset") || 0) * 1000;
+    const resetSuffix = resetAt ? ` (resets ${new Date(resetAt).toISOString()})` : "";
+    if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") {
+      throw new Error(
+        `GitHub 403 rate limit exceeded${resetSuffix} for ${url}. Set GITHUB_TOKEN or GH_TOKEN to increase the limit.`,
+      );
+    }
     throw new Error(`GitHub ${res.status} ${res.statusText} for ${url}`);
   }
   return res;
+}
+
+function resolveRepoHead(repo) {
+  const result = spawnSync("git", ["ls-remote", "--symref", `https://github.com/${repo}.git`, "HEAD"], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error(`git ls-remote failed for ${repo}: ${result.stderr.trim() || "unknown error"}`);
+  }
+
+  let defaultBranch = "main";
+  let sha = "";
+  for (const line of result.stdout.split("\n")) {
+    const symref = line.match(/^ref:\s+refs\/heads\/(.+)\s+HEAD$/);
+    if (symref) {
+      defaultBranch = symref[1];
+      continue;
+    }
+    const head = line.match(/^([0-9a-f]{40})\s+HEAD$/i);
+    if (head) sha = head[1];
+  }
+
+  if (!sha) {
+    throw new Error(`could not resolve HEAD for ${repo}`);
+  }
+
+  return { defaultBranch, sha };
 }
 
 async function resolveRepoInfo(repo) {
   const res = await ghFetch(`https://api.github.com/repos/${repo}`);
   const body = await res.json();
   return {
-    defaultBranch: body.default_branch || "main",
     sizeKB: body.size || 0,
   };
-}
-
-async function resolveCommitSha(repo, ref) {
-  const res = await ghFetch(`https://api.github.com/repos/${repo}/commits/${ref}`);
-  const body = await res.json();
-  return body.sha;
 }
 
 // Tarball download size threshold (KB). Above this we use per-file fetch.
@@ -194,11 +225,13 @@ function findSkillDirsInTree(tree, skillName) {
 
 async function downloadRawFile(repo, sha, repoPath, destFile) {
   const url = `https://raw.githubusercontent.com/${repo}/${sha}/${repoPath}`;
+  const headers = { "User-Agent": "autoskills-sync" };
+  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TARBALL_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
-      headers: { "User-Agent": "autoskills-sync" },
+      headers,
       signal: ac.signal,
     });
     if (!res.ok || !res.body) {
@@ -247,6 +280,59 @@ function extractTarball(tarFile, destDir) {
   const root = entries.find((e) => statSync(join(destDir, e)).isDirectory());
   if (!root) throw new Error(`Empty tarball in ${destDir}`);
   return join(destDir, root);
+}
+
+function runGit(args, label) {
+  const result = spawnSync("git", args, {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed: ${result.stderr.trim() || "unknown error"}`);
+  }
+  return result.stdout;
+}
+
+function materializeSkillsFromSparseClone(repo, branch, skillNames, destRoot) {
+  const repoDir = join(destRoot, "repo");
+  runGit(
+    [
+      "clone",
+      "--depth",
+      "1",
+      "--filter=blob:none",
+      "--sparse",
+      "--branch",
+      branch,
+      `https://github.com/${repo}.git`,
+      repoDir,
+    ],
+    `git clone ${repo}`,
+  );
+
+  const paths = runGit(["-C", repoDir, "ls-tree", "-r", "--name-only", "HEAD"], `git ls-tree ${repo}`)
+    .split("\n")
+    .filter(Boolean);
+  const tree = paths.map((path) => ({ type: "blob", path }));
+  const found = new Map();
+  const sparsePatterns = new Set();
+
+  for (const skillName of skillNames) {
+    const dirs = findSkillDirsInTree(tree, skillName);
+    if (dirs.length === 0) continue;
+    const pick = dirs[0];
+    sparsePatterns.add(pick === "" ? "SKILL.md" : `${pick}/**`);
+    found.set(skillName, pick === "" ? repoDir : join(repoDir, pick));
+  }
+
+  if (sparsePatterns.size > 0) {
+    runGit(
+      ["-C", repoDir, "sparse-checkout", "set", "--no-cone", ...sparsePatterns],
+      `git sparse-checkout ${repo}`,
+    );
+  }
+
+  return found;
 }
 
 // ── Filesystem walk ──────────────────────────────────────────
@@ -425,6 +511,18 @@ function saveManifest(manifest) {
   writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
 }
 
+function getManifestRepoSha(manifest, repo, skills) {
+  const shas = new Set();
+  for (const s of skills) {
+    const prev = manifest.skills[s.skillName];
+    if (!prev || prev.source !== repo || prev.skillPath !== s.full || !prev.commitSha) {
+      return null;
+    }
+    shas.add(prev.commitSha);
+  }
+  return shas.size === 1 ? [...shas][0] : null;
+}
+
 // ── Main ─────────────────────────────────────────────────────
 
 async function main() {
@@ -458,23 +556,46 @@ async function main() {
     const tmpDir = mkdtempSync(join(tmpdir(), "autoskills-sync-"));
 
     try {
-      const info = await resolveRepoInfo(repo);
-      sha = await resolveCommitSha(repo, info.defaultBranch);
+      const head = resolveRepoHead(repo);
+      sha = head.sha;
 
-      if (info.sizeKB > HEAVY_REPO_KB) {
-        log(dim(`   ↳ repo is ${(info.sizeKB / 1024).toFixed(0)} MB — using per-file fetch`));
-        const destRoot = join(tmpDir, "skills");
-        mkdirSync(destRoot, { recursive: true });
-        directSkillDirs = await materializeSkillsFromTree(
+      const manifestSha = getManifestRepoSha(manifest, repo, skills);
+      if (manifestSha === sha) {
+        for (const { skillName } of skills) {
+          log(dim(`   · ${skillName} — unchanged`));
+          report.totals.skills++;
+          report.totals.unchanged++;
+        }
+        rmSync(tmpDir, { recursive: true, force: true });
+        continue;
+      }
+
+      if (!GITHUB_TOKEN) {
+        log(dim("   ↳ repo changed — using sparse git checkout"));
+        directSkillDirs = materializeSkillsFromSparseClone(
           repo,
-          sha,
+          head.defaultBranch,
           skills.map((s) => s.skillName),
-          destRoot,
+          tmpDir,
         );
       } else {
-        const tarFile = join(tmpDir, "repo.tar.gz");
-        await downloadTarball(repo, sha, tarFile);
-        repoRoot = extractTarball(tarFile, tmpDir);
+        const info = await resolveRepoInfo(repo);
+
+        if (info.sizeKB > HEAVY_REPO_KB) {
+          log(dim(`   ↳ repo is ${(info.sizeKB / 1024).toFixed(0)} MB — using per-file fetch`));
+          const destRoot = join(tmpDir, "skills");
+          mkdirSync(destRoot, { recursive: true });
+          directSkillDirs = await materializeSkillsFromTree(
+            repo,
+            sha,
+            skills.map((s) => s.skillName),
+            destRoot,
+          );
+        } else {
+          const tarFile = join(tmpDir, "repo.tar.gz");
+          await downloadTarball(repo, sha, tarFile);
+          repoRoot = extractTarball(tarFile, tmpDir);
+        }
       }
     } catch (err) {
       log(red(`   ✘ repo fetch failed: ${err.message}`));
@@ -518,7 +639,7 @@ async function main() {
       );
 
       const prev = manifest.skills[skillName];
-      if (prev && prev.bundleHash === bundleHash && !FLAGS.force) {
+      if (prev && prev.bundleHash === bundleHash) {
         log(dim(`   · ${skillName} — unchanged`));
         report.totals.unchanged++;
         continue;
