@@ -30,6 +30,9 @@ import {
 
 // ── Registry ─────────────────────────────────────────────────
 
+const DEFAULT_REGISTRY_RAW_BASE_URL =
+  "https://raw.githubusercontent.com/midudev/autoskills/main/packages/autoskills/skills-registry";
+
 export interface RegistryEntry {
   source: string;
   skillPath: string;
@@ -139,6 +142,8 @@ export interface InstallResult {
 interface InstallOptions {
   projectDir?: string;
   registryDir?: string;
+  registryBaseUrl?: string;
+  fetchImpl?: typeof fetch;
 }
 
 function relPathFromTo(from: string, to: string): string {
@@ -146,9 +151,82 @@ function relPathFromTo(from: string, to: string): string {
   return rel.split("\\").join("/");
 }
 
-function copyFile(src: string, dest: string): void {
-  mkdirSync(dirname(dest), { recursive: true });
-  copyFileSync(src, dest);
+function sha256Buffer(buf: Buffer): string {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+function getRegistryRawBaseUrl(opts: InstallOptions): string {
+  return (
+    opts.registryBaseUrl ||
+    process.env.AUTOSKILLS_REGISTRY_BASE_URL ||
+    DEFAULT_REGISTRY_RAW_BASE_URL
+  ).replace(/\/+$/, "");
+}
+
+function encodeRawPath(skillName: string, rel: string): string {
+  return [skillName, ...rel.split("/")].map(encodeURIComponent).join("/");
+}
+
+async function downloadRegistryFile(
+  skillName: string,
+  entry: RegistryEntry,
+  rel: string,
+  opts: InstallOptions,
+): Promise<Buffer> {
+  const expected = entry.sha256[rel];
+  if (!expected) {
+    throw new Error(`no recorded hash for ${rel}`);
+  }
+
+  const baseUrl = getRegistryRawBaseUrl(opts);
+  const url = `${baseUrl}/${encodeRawPath(skillName, rel)}`;
+  const fetchFile = opts.fetchImpl || fetch;
+  const res = await fetchFile(url, {
+    headers: { "User-Agent": "autoskills" },
+  });
+  if (!res.ok) {
+    throw new Error(`download failed for ${rel}: ${res.status} ${res.statusText}`);
+  }
+
+  const buf = Buffer.from(await res.arrayBuffer());
+  const actual = sha256Buffer(buf);
+  if (actual !== expected) {
+    throw new Error(`hash mismatch for ${rel}`);
+  }
+  return buf;
+}
+
+async function downloadRegistryEntry(
+  skillName: string,
+  entry: RegistryEntry,
+  destDir: string,
+  opts: InstallOptions,
+): Promise<void> {
+  const files = await Promise.all(
+    entry.files.map(async (rel) => ({
+      rel,
+      buf: await downloadRegistryFile(skillName, entry, rel, opts),
+    })),
+  );
+
+  const bundleHash = createHash("sha256")
+    .update(
+      files
+        .map(({ rel, buf }) => `${rel}:${sha256Buffer(buf)}`)
+        .sort()
+        .join("\n"),
+    )
+    .digest("hex");
+  if (bundleHash !== entry.bundleHash) {
+    throw new Error("bundle hash mismatch");
+  }
+
+  rmSync(destDir, { recursive: true, force: true });
+  for (const { rel, buf } of files) {
+    const dest = join(destDir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, buf);
+  }
 }
 
 function ensureSymlinkTo(target: string, linkPath: string): void {
@@ -219,7 +297,6 @@ export async function installSkill(
   opts: InstallOptions = {},
 ): Promise<InstallResult> {
   const projectDir = opts.projectDir || process.cwd();
-  const registryDir = opts.registryDir || getRegistryDir();
   const command = `autoskills install ${skillPath}`;
 
   const fail = (msg: string): InstallResult => ({
@@ -236,7 +313,7 @@ export async function installSkill(
   const registry = loadRegistry();
   if (!registry) {
     return fail(
-      `skills-registry not found. Run 'pnpm sync:skills' in the autoskills package.`,
+      `skills-registry index not found. Run 'pnpm sync:skills' in the autoskills package.`,
     );
   }
 
@@ -245,19 +322,11 @@ export async function installSkill(
     return fail(`skill '${skillName}' not found in registry (unaudited).`);
   }
 
-  const verdict = verifyRegistryEntry(skillName, entry, registryDir);
-  if (!verdict.ok) {
-    return fail(`integrity check failed: ${verdict.reason}`);
-  }
-
   const canonicalDir = join(projectDir, ".agents", "skills", skillName);
   try {
-    rmSync(canonicalDir, { recursive: true, force: true });
-    for (const rel of entry.files) {
-      copyFile(join(registryDir, skillName, rel), join(canonicalDir, rel));
-    }
+    await downloadRegistryEntry(skillName, entry, canonicalDir, opts);
   } catch (err) {
-    return fail(`copy failed: ${(err as Error).message}`);
+    return fail(`download failed: ${(err as Error).message}`);
   }
 
   const uniqueFolders = new Set<string>();

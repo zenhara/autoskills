@@ -71,6 +71,24 @@ function buildRegistry(dir: string, skills: FakeSkill[]): void {
   writeFileSync(join(dir, "index.json"), JSON.stringify(manifest, null, 2));
 }
 
+function fetchFromRegistry(regDir: string): typeof fetch {
+  return (async (url: string | URL | Request) => {
+    const href = typeof url === "string" || url instanceof URL ? String(url) : url.url;
+    const pathname = new URL(href).pathname;
+    const marker = "/skills-registry/";
+    const idx = pathname.indexOf(marker);
+    if (idx === -1) {
+      return new Response("not found", { status: 404, statusText: "Not Found" });
+    }
+    const rel = decodeURIComponent(pathname.slice(idx + marker.length));
+    const filePath = join(regDir, ...rel.split("/"));
+    if (!existsSync(filePath)) {
+      return new Response("not found", { status: 404, statusText: "Not Found" });
+    }
+    return new Response(readFileSync(filePath));
+  }) as typeof fetch;
+}
+
 describe("agentFolderFor", () => {
   it("maps claude-code to .claude", () => {
     equal(agentFolderFor("claude-code"), ".claude");
@@ -145,6 +163,8 @@ describe("installSkill", () => {
     const result = await installSkill("owner/repo/hello-skill", [], {
       projectDir,
       registryDir: regDir,
+      registryBaseUrl: "https://example.test/skills-registry",
+      fetchImpl: fetchFromRegistry(regDir),
     });
 
     ok(result.success, result.output);
@@ -169,6 +189,8 @@ describe("installSkill", () => {
     const result = await installSkill("owner/repo/s1", ["universal", "claude-code", "cursor"], {
       projectDir,
       registryDir: regDir,
+      registryBaseUrl: "https://example.test/skills-registry",
+      fetchImpl: fetchFromRegistry(regDir),
     });
     ok(result.success, result.output);
 
@@ -198,7 +220,7 @@ describe("installSkill", () => {
     ok(result.output.includes("not found in registry"));
   });
 
-  it("rejects when registry integrity check fails", async () => {
+  it("rejects when downloaded content fails the integrity check", async () => {
     const regDir = join(tmp.path, "registry");
     const projectDir = join(tmp.path, "project");
     mkdirSync(projectDir, { recursive: true });
@@ -211,9 +233,11 @@ describe("installSkill", () => {
     const result = await installSkill("owner/repo/tampered", [], {
       projectDir,
       registryDir: regDir,
+      registryBaseUrl: "https://example.test/skills-registry",
+      fetchImpl: fetchFromRegistry(regDir),
     });
     ok(!result.success);
-    ok(result.output.includes("integrity check failed"));
+    ok(result.output.includes("hash mismatch"));
   });
 
   it("preserves existing entries in skills-lock.json and sorts keys", async () => {
@@ -235,6 +259,8 @@ describe("installSkill", () => {
     const result = await installSkill("owner/repo/alpha", [], {
       projectDir,
       registryDir: regDir,
+      registryBaseUrl: "https://example.test/skills-registry",
+      fetchImpl: fetchFromRegistry(regDir),
     });
     ok(result.success);
 
