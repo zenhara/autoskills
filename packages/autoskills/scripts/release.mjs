@@ -14,6 +14,45 @@ const CHANGELOG_PATH = resolve(ROOT, "CHANGELOG.md");
 const VALID_BUMPS = ["patch", "minor", "major"];
 
 /**
+ * Normalizes repository URLs to a browser-safe HTTPS GitHub URL.
+ * Supports git+https, SSH (git@github.com:owner/repo), and ssh://git@ URLs.
+ * Falls back to the project default when input is missing or invalid.
+ * @param {string | undefined} rawUrl
+ * @returns {string}
+ */
+function normalizeRepoUrl(rawUrl) {
+  const fallback = "https://github.com/midudev/autoskills";
+  if (!rawUrl || typeof rawUrl !== "string") return fallback;
+
+  let url = rawUrl.trim();
+
+  // Convert git+https://... -> https://...
+  if (url.startsWith("git+https://")) {
+    url = url.replace(/^git\+/, "");
+  }
+
+  // Convert git@github.com:owner/repo(.git)? -> https://github.com/owner/repo
+  if (/^git@github\.com:/.test(url)) {
+    url = url.replace(/^git@github\.com:/, "https://github.com/");
+  }
+
+  // Convert ssh://git@github.com/owner/repo(.git)? -> https://github.com/owner/repo
+  if (/^ssh:\/\/git@github\.com\//.test(url)) {
+    url = url.replace(/^ssh:\/\/git@github\.com\//, "https://github.com/");
+  }
+
+  // Remove trailing .git and trailing slash
+  url = url.replace(/\.git$/, "").replace(/\/+$/, "");
+
+  // Allow only http/https browser-safe URLs
+  if (!/^https?:\/\//.test(url)) {
+    return fallback;
+  }
+
+  return url;
+}
+
+/**
  * Executes a shell command synchronously and returns its trimmed stdout.
  * @param {string} cmd - Command to run.
  * @param {import('node:child_process').ExecSyncOptions} [opts]
@@ -194,8 +233,7 @@ if (!bump || !VALID_BUMPS.includes(bump)) {
 }
 
 const pkg = JSON.parse(readFileSync(PKG_PATH, "utf-8"));
-const repoUrl =
-  pkg.repository?.url?.replace(/\.git$/, "") || "https://github.com/midudev/autoskills";
+const repoUrl = normalizeRepoUrl(pkg.repository?.url);
 const currentVersion = pkg.version;
 const newVersion = bumpVersion(currentVersion, bump);
 const originalPkgContent = readFileSync(PKG_PATH, "utf-8");
