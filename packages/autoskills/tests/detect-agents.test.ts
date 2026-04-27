@@ -19,14 +19,14 @@ describe("detectAgents", () => {
     ok(agents.includes("claude-code"));
   });
 
-  it("detects cursor from .cursor/skills", () => {
-    mkdirSync(join(tmp.path, ".cursor", "skills"), { recursive: true });
-    ok(detectAgents(tmp.path).includes("cursor"));
+  it("detects junie from .junie/skills", () => {
+    mkdirSync(join(tmp.path, ".junie", "skills"), { recursive: true });
+    ok(detectAgents(tmp.path).includes("junie"));
   });
 
-  it("detects opencode from .opencode/skills", () => {
-    mkdirSync(join(tmp.path, ".opencode", "skills"), { recursive: true });
-    ok(detectAgents(tmp.path).includes("opencode"));
+  it("detects codebuddy from .codebuddy/skills", () => {
+    mkdirSync(join(tmp.path, ".codebuddy", "skills"), { recursive: true });
+    ok(detectAgents(tmp.path).includes("codebuddy"));
   });
 
   it("detects kiro-cli from .kiro/skills", () => {

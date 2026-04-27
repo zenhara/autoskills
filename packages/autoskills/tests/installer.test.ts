@@ -96,8 +96,11 @@ describe("agentFolderFor", () => {
   it("maps claude-code to .claude", () => {
     equal(agentFolderFor("claude-code"), ".claude");
   });
-  it("maps cursor to .cursor", () => {
-    equal(agentFolderFor("cursor"), ".cursor");
+  it("maps junie to .junie", () => {
+    equal(agentFolderFor("junie"), ".junie");
+  });
+  it("maps codebuddy to .codebuddy", () => {
+    equal(agentFolderFor("codebuddy"), ".codebuddy");
   });
   it("does not map codex to a legacy .codex folder", () => {
     equal(agentFolderFor("codex"), null);
@@ -302,7 +305,7 @@ describe("installSkill", () => {
     buildRegistry(regDir, [{ name: "s1", source: "owner/repo", files: { "SKILL.md": "# s1" } }]);
     _setRegistryDir(regDir);
 
-    const result = await installSkill("owner/repo/s1", ["universal", "claude-code", "cursor"], {
+    const result = await installSkill("owner/repo/s1", ["universal", "claude-code", "junie"], {
       projectDir,
       registryDir: regDir,
       registryBaseUrl: "https://example.test/skills-registry",
@@ -311,9 +314,9 @@ describe("installSkill", () => {
     ok(result.success, result.output);
 
     const claudeLink = join(projectDir, ".claude", "skills", "s1");
-    const cursorLink = join(projectDir, ".cursor", "skills", "s1");
+    const junieLink = join(projectDir, ".junie", "skills", "s1");
     ok(existsSync(claudeLink));
-    ok(existsSync(cursorLink));
+    ok(existsSync(junieLink));
 
     const target = readlinkSync(claudeLink);
     ok(target.includes(".agents/skills/s1") || target.includes(".agents\\skills\\s1"));

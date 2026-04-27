@@ -1347,8 +1347,6 @@ export const FRONTEND_BONUS_SKILLS: string[] = [
 export const AGENT_FOLDER_MAP: Record<string, string> = {
   ".claude": "claude-code",
   ".cline": "cline",
-  ".augment": "augment",
-  ".copilot": "github-copilot",
   ".junie": "junie",
   ".codebuddy": "codebuddy",
   ".continue": "continue",
