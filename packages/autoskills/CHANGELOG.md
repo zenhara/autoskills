@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.4](https://github.com/midudev/autoskills/releases/tag/v0.3.4) (2026-04-28)
+
+### ✨ Features
+
+- feat(autoskills): add verbose install tracing [`cc409f8`](https://github.com/midudev/autoskills/commit/cc409f8)
+- feat(autoskills): fall back to main registry mirror [`f7d9155`](https://github.com/midudev/autoskills/commit/f7d9155)
+
+### 🐛 Bug Fixes
+
+- fix(release): normalize repository URL for changelog and release summary links [`832819e`](https://github.com/midudev/autoskills/commit/832819e)
+
+### 📦 Other Changes
+
+- style(autoskills): format code for improved readability [`a5a3f11`](https://github.com/midudev/autoskills/commit/a5a3f11)
+
 ## [0.3.3](git+https://github.com/midudev/autoskills/releases/tag/v0.3.3) (2026-04-27)
 
 ### ✨ Features
